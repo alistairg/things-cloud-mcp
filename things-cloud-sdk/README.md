@@ -336,7 +336,7 @@ Key findings from reverse engineering the Things Cloud sync protocol:
 - **Status field (`ss`)**: `0` = Pending, `2` = Canceled, `3` = Completed. Don't confuse with `st` (schedule)!
 - **Headings (`tp=2`) must have `st=1`** (anytime). `st=0` (inbox) crashes Things.app.
 - **Tasks in projects, headings, or areas** should default to `st=1` (anytime) — they've been triaged out of inbox.
-- **Kind strings**: `Task6`, `Tag4`, `ChecklistItem3`, `Area3`, `Tombstone2`
+- **Kind strings**: `Task6`, `Tag4`, `ChecklistItem3`, `Area3`, `Tombstone2`. Recent Things clients also emit `Task7` task envelopes alongside `Task6`; the SDK reads them with the same task payload schema (`IsTaskKind`) but keeps writing `Task6`.
 
 See `docs/client-side-bugs.md` for the full investigation and crash analysis.
 

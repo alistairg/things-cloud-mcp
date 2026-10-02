@@ -822,7 +822,7 @@ var DocsPageHTML = `<!DOCTYPE html>
 
   <div class="tool-entry">
     <div class="tool-entry-name">things_find_tasks</div>
-    <div class="tool-entry-desc">List tasks with optional filters. Default pending results exclude descendants of completed, canceled, or trashed containers to match Things app visibility.</div>
+    <div class="tool-entry-desc">List tasks with optional filters. Default pending results exclude descendants of completed, canceled, or trashed containers to match Things app visibility. Recurring to-dos between occurrences appear as their projected next occurrence with <code>materialized:false</code>.</div>
     <table class="params-table">
       <tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
       <tr><td><span class="param-name">schedule</span></td><td class="param-type">enum</td><td>inbox, today, tonight, anytime, someday, upcoming</td></tr>
@@ -903,7 +903,7 @@ var DocsPageHTML = `<!DOCTYPE html>
 
   <div class="tool-entry">
     <div class="tool-entry-name">things_overview</div>
-    <div class="tool-entry-desc">Comprehensive active snapshot: tags, active area→project hierarchy, today's items (tasks &amp; projects), and upcoming items. Descendants of inactive containers are excluded. Each item has a <code>type</code> field.</div>
+    <div class="tool-entry-desc">Comprehensive active snapshot: tags, active area→project hierarchy, today's items (tasks &amp; projects), and upcoming items. Descendants of inactive containers are excluded. Each item has a <code>type</code> field. Recurring to-dos between occurrences appear as their projected next occurrence with <code>materialized:false</code>.</div>
     <table class="params-table">
       <tr><th>Parameter</th><th>Type</th><th>Description</th></tr>
       <tr><td><span class="param-name">lookahead_days</span></td><td class="param-type">number</td><td>Days ahead to scan for upcoming items (default: 7)</td></tr>

@@ -59,7 +59,11 @@ var (
 	ItemKindChecklistItem2 ItemKind = "ChecklistItem2"
 	ItemKindChecklistItem3 ItemKind = "ChecklistItem3"
 	// ItemKindTask identifies a Task or Subtask
-	ItemKindTask      ItemKind = "Task6"
+	ItemKindTask ItemKind = "Task6"
+	// ItemKindTask7 is a newer task envelope kind emitted alongside Task6 by
+	// recent Things clients. Its payload is decoded with the same task payload
+	// schema; identifiers are current-generation Base58 (never legacy UUIDs).
+	ItemKindTask7     ItemKind = "Task7"
 	ItemKindTask4     ItemKind = "Task4"
 	ItemKindTask3     ItemKind = "Task3"
 	ItemKindTaskPlain ItemKind = "Task"
@@ -95,6 +99,20 @@ func IsSettingsKind(kind ItemKind) bool {
 		}
 	}
 	return true
+}
+
+// IsTaskKind reports whether kind is a known Task-family envelope kind whose
+// payload decodes as TaskActionItemPayload. Every routing site (validation,
+// application, sync) must use this single classifier so a kind cannot be
+// accepted in one phase and dropped in another. Unknown future versions
+// (Task8+) are intentionally NOT matched: a new kind may change field
+// semantics or identifier generation, so it stays fail-closed until verified.
+func IsTaskKind(kind ItemKind) bool {
+	switch kind {
+	case ItemKindTask, ItemKindTask7, ItemKindTask4, ItemKindTask3, ItemKindTaskPlain:
+		return true
+	}
+	return false
 }
 
 // Timestamp allows unix epochs represented as float or ints to be unmarshalled

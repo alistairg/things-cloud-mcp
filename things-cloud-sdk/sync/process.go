@@ -64,9 +64,10 @@ func (s *Syncer) processItem(item things.Item, serverIndex int, ts time.Time) ([
 		// Versioned settings are account metadata, not task-graph entities.
 		return nil, nil
 	}
-	switch item.Kind {
-	case things.ItemKindTask, things.ItemKindTask4, things.ItemKindTask3, things.ItemKindTaskPlain:
+	if things.IsTaskKind(item.Kind) {
 		return s.processTaskItem(item, serverIndex, ts)
+	}
+	switch item.Kind {
 	case things.ItemKindArea, things.ItemKindArea3, things.ItemKindAreaPlain:
 		return s.processAreaItem(item, serverIndex, ts)
 	case things.ItemKindTag, things.ItemKindTag4, things.ItemKindTagPlain:

@@ -753,16 +753,21 @@ type Ref struct {
 }
 
 type TaskOutput struct {
-	UUID             string  `json:"uuid"`
-	Type             string  `json:"type"`
-	Title            string  `json:"title"`
-	Note             string  `json:"note,omitempty"`
-	Status           string  `json:"status"`
-	Schedule         string  `json:"schedule"`
-	ScheduledDate    *string `json:"scheduledDate,omitempty"`
-	DeadlineDate     *string `json:"deadlineDate,omitempty"`
-	ReminderTime     *string `json:"reminderTime,omitempty"`
-	IsRecurring      bool    `json:"isRecurring"`
+	UUID          string  `json:"uuid"`
+	Type          string  `json:"type"`
+	Title         string  `json:"title"`
+	Note          string  `json:"note,omitempty"`
+	Status        string  `json:"status"`
+	Schedule      string  `json:"schedule"`
+	ScheduledDate *string `json:"scheduledDate,omitempty"`
+	DeadlineDate  *string `json:"deadlineDate,omitempty"`
+	ReminderTime  *string `json:"reminderTime,omitempty"`
+	IsRecurring   bool    `json:"isRecurring"`
+	// Materialized is set to false on synthetic occurrences projected from a
+	// recurring template that has no open instance yet (omitted otherwise).
+	// Projected items cannot be completed or edited until Things materializes
+	// the real occurrence on next app sync.
+	Materialized     *bool   `json:"materialized,omitempty"`
 	CreationDate     *string `json:"creationDate,omitempty"`
 	ModificationDate *string `json:"modificationDate,omitempty"`
 	CompletionDate   *string `json:"completionDate,omitempty"`
@@ -909,7 +914,7 @@ func (t *ThingsMCP) taskToOutput(task *thingscloud.Task) TaskOutput {
 		s := task.CompletionDate.UTC().Format(isoFormat)
 		out.CompletionDate = &s
 	}
-	for _, areaID := range task.AreaIDs {
+	for _, areaID := range t.effectiveAreaIDs(task) {
 		if area, ok := state.Areas[areaID]; ok {
 			out.Areas = append(out.Areas, Ref{UUID: areaID, Name: area.Title})
 		}
@@ -940,7 +945,7 @@ func (t *ThingsMCP) taskToOutput(task *thingscloud.Task) TaskOutput {
 			}
 		}
 	}
-	for _, tagID := range task.TagIDs {
+	for _, tagID := range t.effectiveTagIDs(task) {
 		if tag, ok := state.Tags[tagID]; ok {
 			out.Tags = append(out.Tags, Ref{UUID: tagID, Name: tag.Title})
 		}
@@ -1431,7 +1436,7 @@ func (t *ThingsMCP) taskMatchesProject(task *thingscloud.Task, projectUUID strin
 // taskMatchesArea checks if a task belongs to an area, either directly
 // via AreaIDs or indirectly via its parent project's AreaIDs.
 func (t *ThingsMCP) taskMatchesArea(task *thingscloud.Task, areaUUID string) bool {
-	if containsStr(task.AreaIDs, areaUUID) {
+	if containsStr(t.effectiveAreaIDs(task), areaUUID) {
 		return true
 	}
 	// Check parent project's area (direct parent or via heading)
@@ -1540,6 +1545,103 @@ func (t *ThingsMCP) findTask(uuid string) *thingscloud.Task {
 // Instances never have rr — only rt pointing to their template.
 func isRecurringTemplate(task *thingscloud.Task) bool {
 	return task.Repeater != nil
+}
+
+// templateFor returns the recurrence template behind a recurring instance,
+// or nil for non-recurring tasks and dangling references.
+func (t *ThingsMCP) templateFor(task *thingscloud.Task) *thingscloud.Task {
+	if len(task.RecurrenceIDs) == 0 {
+		return nil
+	}
+	tpl, ok := t.getState().Tasks[task.RecurrenceIDs[0]]
+	if !ok || tpl == nil || !isRecurringTemplate(tpl) {
+		return nil
+	}
+	return tpl
+}
+
+// effectiveTagIDs returns the task's own tags, falling back to its recurrence
+// template's tags. Things stores tags canonically on the template; instances
+// (especially completed ones) often carry an empty tg array.
+func (t *ThingsMCP) effectiveTagIDs(task *thingscloud.Task) []string {
+	if len(task.TagIDs) > 0 {
+		return task.TagIDs
+	}
+	if tpl := t.templateFor(task); tpl != nil {
+		return tpl.TagIDs
+	}
+	return nil
+}
+
+// effectiveAreaIDs is the same template fallback for areas.
+func (t *ThingsMCP) effectiveAreaIDs(task *thingscloud.Task) []string {
+	if len(task.AreaIDs) > 0 {
+		return task.AreaIDs
+	}
+	if tpl := t.templateFor(task); tpl != nil {
+		return tpl.AreaIDs
+	}
+	return nil
+}
+
+// projectedOccurrence returns a synthetic pending occurrence for a recurring
+// template whose next fire date (tir) is known but not yet materialized as an
+// open instance. Returns nil when the template is trashed or untitled, has no
+// next fire date, its recurrence ends before that date, or an open instance
+// already represents the task. The projection reuses the template's UUID and
+// points rt at itself so tag/area fallbacks and IsRecurring detection apply;
+// callers mark the output with materialized:false.
+func (t *ThingsMCP) projectedOccurrence(tpl *thingscloud.Task) *thingscloud.Task {
+	if !isRecurringTemplate(tpl) || tpl.InTrash || isUntitledTask(tpl) {
+		return nil
+	}
+	next := tpl.TodayIndexRefDate
+	if next == nil {
+		return nil
+	}
+	if rr := tpl.Repeater; !rr.IsNeverending() && rr.LastScheduledAt != nil && rr.LastScheduledAt.Time().Before(*next) {
+		return nil // recurrence ended before the projected date
+	}
+	for _, task := range t.getState().Tasks {
+		if task.Status == thingscloud.TaskStatusPending && !task.InTrash &&
+			!isRecurringTemplate(task) && containsStr(task.RecurrenceIDs, tpl.UUID) {
+			return nil // an open instance already represents this task
+		}
+	}
+	proj := *tpl
+	proj.Repeater = nil
+	proj.RecurrenceIDs = []string{tpl.UUID}
+	proj.Status = thingscloud.TaskStatusPending
+	// Mirror a real future instance: st=2 with the fire date renders as
+	// "upcoming", flipping to "today" once the date arrives.
+	proj.Schedule = thingscloud.TaskScheduleSomeday
+	proj.ScheduledDate = next
+	proj.CompletionDate = nil
+	return &proj
+}
+
+// projectedOccurrences returns synthetic occurrences for every active
+// recurring template that currently has no open instance.
+func (t *ThingsMCP) projectedOccurrences() []*thingscloud.Task {
+	var out []*thingscloud.Task
+	for _, tpl := range t.getState().Tasks {
+		if !isRecurringTemplate(tpl) {
+			continue
+		}
+		if proj := t.projectedOccurrence(tpl); proj != nil {
+			out = append(out, proj)
+		}
+	}
+	return out
+}
+
+// taskToOutputProjected converts a projected occurrence, marking it as not
+// yet materialized.
+func (t *ThingsMCP) taskToOutputProjected(task *thingscloud.Task) TaskOutput {
+	out := t.taskToOutput(task)
+	f := false
+	out.Materialized = &f
+	return out
 }
 
 // isUntitledTask returns true if the task has no real title. Things sometimes
@@ -1756,6 +1858,7 @@ func outputSchemaFor(toolName string) json.RawMessage {
 			"note": stringSchema(), "status": stringSchema(), "schedule": stringSchema(),
 			"scheduledDate": stringSchema(), "deadlineDate": stringSchema(), "reminderTime": stringSchema(),
 			"isRecurring":  map[string]any{"type": "boolean"},
+			"materialized": map[string]any{"type": "boolean"},
 			"creationDate": stringSchema(), "modificationDate": stringSchema(), "completionDate": stringSchema(),
 			"areas":     map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
 			"project":   map[string]any{"type": "object"},
@@ -2086,7 +2189,7 @@ func (t *ThingsMCP) handleDiagnose(email, password string) *diagReport {
 			if ierr == nil {
 				var newestDate time.Time
 				for _, item := range items {
-					if item.Kind != thingscloud.ItemKindTask {
+					if !thingscloud.IsTaskKind(item.Kind) {
 						continue
 					}
 					var payload thingscloud.TaskActionItemPayload
@@ -2295,7 +2398,7 @@ func (t *ThingsMCP) diagnoseSteps4to7(history *thingscloud.History, report *diag
 		}
 		for _, item := range allItems[tailStart:] {
 			ti := tailItem{Kind: string(item.Kind), Action: int(item.Action)}
-			if item.Kind == thingscloud.ItemKindTask {
+			if thingscloud.IsTaskKind(item.Kind) {
 				var payload thingscloud.TaskActionItemPayload
 				if uerr := json.Unmarshal(item.P, &payload); uerr == nil {
 					if payload.CreationDate != nil {
@@ -2700,8 +2803,20 @@ func (t *ThingsMCP) handleFindTasks(_ context.Context, req mcp.CallToolRequest) 
 		}
 	}
 
-	var filtered []*thingscloud.Task
+	// Recurring templates with no open instance are represented by a
+	// synthetic projected occurrence (marked materialized:false in output).
+	candidates := make([]*thingscloud.Task, 0, len(state.Tasks))
 	for _, task := range state.Tasks {
+		candidates = append(candidates, task)
+	}
+	projected := make(map[string]bool)
+	for _, proj := range t.projectedOccurrences() {
+		candidates = append(candidates, proj)
+		projected[proj.UUID] = true
+	}
+
+	var filtered []*thingscloud.Task
+	for _, task := range candidates {
 		// Skip headings and projects
 		if task.Type == thingscloud.TaskTypeProject || task.Type == thingscloud.TaskTypeHeading {
 			continue
@@ -2791,7 +2906,7 @@ func (t *ThingsMCP) handleFindTasks(_ context.Context, req mcp.CallToolRequest) 
 		if projectUUID != "" && !t.taskMatchesProject(task, projectUUID) {
 			continue
 		}
-		if tagUUID != "" && !containsStr(task.TagIDs, tagUUID) {
+		if tagUUID != "" && !containsStr(t.effectiveTagIDs(task), tagUUID) {
 			continue
 		}
 		if containsText != "" && !strings.Contains(strings.ToLower(task.Title), containsText) && !strings.Contains(strings.ToLower(task.Note), containsText) {
@@ -2828,7 +2943,11 @@ func (t *ThingsMCP) handleFindTasks(_ context.Context, req mcp.CallToolRequest) 
 	}
 	tasks := make([]TaskOutput, len(filtered))
 	for i, task := range filtered {
-		tasks[i] = t.taskToOutput(task)
+		if projected[task.UUID] {
+			tasks[i] = t.taskToOutputProjected(task)
+		} else {
+			tasks[i] = t.taskToOutput(task)
+		}
 	}
 	if len(tasks) == 0 {
 		tasks = []TaskOutput{}
@@ -2919,10 +3038,22 @@ func (t *ThingsMCP) handleShowTask(_ context.Context, req mcp.CallToolRequest) (
 	state := t.getState()
 	for _, task := range state.Tasks {
 		if strings.HasPrefix(task.UUID, uuidPrefix) {
+			isProjection := false
 			if isRecurringTemplate(task) {
-				return errResult(fmt.Sprintf("task not found: %s", uuidPrefix)), nil
+				// Templates are internal, but when no open instance exists we
+				// surface the projected next occurrence (materialized:false).
+				proj := t.projectedOccurrence(task)
+				if proj == nil {
+					return errResult(fmt.Sprintf("%s is a recurring template; query its open occurrence via things_find_tasks instead", task.UUID)), nil
+				}
+				task = proj
+				isProjection = true
 			}
 			out := TaskDetailOutput{TaskOutput: t.taskToOutput(task)}
+			if isProjection {
+				f := false
+				out.Materialized = &f
+			}
 			// Add checklist items
 			for _, cli := range state.CheckListItems {
 				if containsStr(cli.TaskIDs, task.UUID) {
@@ -2986,10 +3117,20 @@ func (t *ThingsMCP) handleShowProject(_ context.Context, req mcp.CallToolRequest
 		headingOrder[i] = ht.UUID
 	}
 
-	// Collect tasks in this project, group by heading
+	// Collect tasks in this project, group by heading. Recurring templates
+	// with no open instance contribute a projected occurrence.
+	candidates := make([]*thingscloud.Task, 0, len(state.Tasks))
+	for _, task := range state.Tasks {
+		candidates = append(candidates, task)
+	}
+	projected := make(map[string]bool)
+	for _, proj := range t.projectedOccurrences() {
+		candidates = append(candidates, proj)
+		projected[proj.UUID] = true
+	}
 	var unfiledRaw []*thingscloud.Task
 	headingTasksRaw := make(map[string][]*thingscloud.Task)
-	for _, task := range state.Tasks {
+	for _, task := range candidates {
 		if task.InTrash || task.Type == thingscloud.TaskTypeProject || task.Type == thingscloud.TaskTypeHeading {
 			continue
 		}
@@ -3028,15 +3169,21 @@ func (t *ThingsMCP) handleShowProject(_ context.Context, req mcp.CallToolRequest
 			unfiledRaw = append(unfiledRaw, task)
 		}
 	}
+	toOutput := func(task *thingscloud.Task) TaskOutput {
+		if projected[task.UUID] {
+			return t.taskToOutputProjected(task)
+		}
+		return t.taskToOutput(task)
+	}
 	sortByIndex(unfiledRaw)
 	unfiled := make([]TaskOutput, len(unfiledRaw))
 	for i, task := range unfiledRaw {
-		unfiled[i] = t.taskToOutput(task)
+		unfiled[i] = toOutput(task)
 	}
 	for hid, raw := range headingTasksRaw {
 		sortByIndex(raw)
 		for _, task := range raw {
-			headingMap[hid].Tasks = append(headingMap[hid].Tasks, t.taskToOutput(task))
+			headingMap[hid].Tasks = append(headingMap[hid].Tasks, toOutput(task))
 		}
 	}
 
@@ -3216,7 +3363,7 @@ func (t *ThingsMCP) handleFindProjects(_ context.Context, req mcp.CallToolReques
 		if areaUUID != "" && !containsStr(task.AreaIDs, areaUUID) {
 			continue
 		}
-		if tagUUID != "" && !containsStr(task.TagIDs, tagUUID) {
+		if tagUUID != "" && !containsStr(t.effectiveTagIDs(task), tagUUID) {
 			continue
 		}
 		if containsText != "" && !strings.Contains(strings.ToLower(task.Title), containsText) && !strings.Contains(strings.ToLower(task.Note), containsText) {
@@ -3389,7 +3536,25 @@ func (t *ThingsMCP) handleOverview(_ context.Context, req mcp.CallToolRequest) (
 	todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
 	cutoff := todayEnd.AddDate(0, 0, lookahead)
 
+	// Recurring templates with no open instance contribute a projected
+	// occurrence so repeating to-dos never vanish between occurrences.
+	candidates := make([]*thingscloud.Task, 0, len(state.Tasks))
 	for _, task := range state.Tasks {
+		candidates = append(candidates, task)
+	}
+	projected := make(map[string]bool)
+	for _, proj := range t.projectedOccurrences() {
+		candidates = append(candidates, proj)
+		projected[proj.UUID] = true
+	}
+	toOutput := func(task *thingscloud.Task) TaskOutput {
+		if projected[task.UUID] {
+			return t.taskToOutputProjected(task)
+		}
+		return t.taskToOutput(task)
+	}
+
+	for _, task := range candidates {
 		if task.Type == thingscloud.TaskTypeHeading {
 			continue
 		}
@@ -3410,12 +3575,12 @@ func (t *ThingsMCP) handleOverview(_ context.Context, req mcp.CallToolRequest) (
 	sortByIndex(todayRaw)
 	todayTasks := make([]TaskOutput, 0, len(todayRaw))
 	for _, task := range todayRaw {
-		todayTasks = append(todayTasks, t.taskToOutput(task))
+		todayTasks = append(todayTasks, toOutput(task))
 	}
 
 	// --- Upcoming tasks ---
 	var upcomingRaw []*thingscloud.Task
-	for _, task := range state.Tasks {
+	for _, task := range candidates {
 		if task.Type == thingscloud.TaskTypeHeading {
 			continue
 		}
@@ -3449,7 +3614,7 @@ func (t *ThingsMCP) handleOverview(_ context.Context, req mcp.CallToolRequest) (
 	})
 	upcomingTasks := make([]TaskOutput, 0, len(upcomingRaw))
 	for _, task := range upcomingRaw {
-		upcomingTasks = append(upcomingTasks, t.taskToOutput(task))
+		upcomingTasks = append(upcomingTasks, toOutput(task))
 	}
 
 	// --- Assemble ---
@@ -3769,7 +3934,7 @@ func (t *ThingsMCP) handleEditTask(_ context.Context, req mcp.CallToolRequest) (
 
 	editTarget := t.findTask(taskUUID)
 	if editTarget != nil && isRecurringTemplate(editTarget) {
-		return errResult(fmt.Sprintf("cannot edit recurring template directly: %s", taskUUID)), nil
+		return errResult(fmt.Sprintf("%s is the projected next occurrence of a recurring to-do (materialized:false); it cannot be completed or edited until Things materializes the real occurrence on next app sync. To change the repeating rule, edit an existing occurrence with the recurrence parameter.", taskUUID)), nil
 	}
 
 	// Validate referenced UUIDs
@@ -4094,7 +4259,7 @@ func defineTools(um *UserManager) []server.ServerTool {
 		// --- Read tools ---
 		{
 			Tool: mcp.NewTool("things_find_tasks",
-				mcp.WithDescription("List tasks from Things 3 with optional filters. Returns an array of task objects, each containing uuid, title, status (pending/completed/canceled), schedule (inbox/today/tonight/anytime/someday/upcoming), and optional fields: note, scheduledDate, deadlineDate, reminderTime, recurrence, areas, project, tags. Use things_show_task to see full details including checklist items. Default: only active pending tasks; pending descendants of completed, canceled, or trashed containers are excluded to match Things app visibility. Use status parameter to query completed or canceled tasks. Note: schedule=today includes both regular and tonight tasks; use schedule=tonight to filter only tonight tasks."),
+				mcp.WithDescription("List tasks from Things 3 with optional filters. Returns an array of task objects, each containing uuid, title, status (pending/completed/canceled), schedule (inbox/today/tonight/anytime/someday/upcoming), and optional fields: note, scheduledDate, deadlineDate, reminderTime, recurrence, areas, project, tags. Use things_show_task to see full details including checklist items. Default: only active pending tasks; pending descendants of completed, canceled, or trashed containers are excluded to match Things app visibility. Use status parameter to query completed or canceled tasks. Note: schedule=today includes both regular and tonight tasks; use schedule=tonight to filter only tonight tasks. Recurring to-dos whose current occurrence was completed appear as their projected next occurrence with materialized:false; such items cannot be completed or edited until Things creates the real occurrence on next app sync."),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
 				mcp.WithIdempotentHintAnnotation(true),
@@ -4207,7 +4372,7 @@ func defineTools(um *UserManager) []server.ServerTool {
 		},
 		{
 			Tool: mcp.NewTool("things_overview",
-				mcp.WithDescription("Returns a comprehensive snapshot of the user's active task landscape in a single call. Includes all tags, the active area-to-project hierarchy (with IDs), today's active items (tasks and projects), and active upcoming scheduled/due items within a configurable lookahead window. Descendants of completed, canceled, or trashed containers are excluded to match Things app visibility. Each item has a type field ('task' or 'project') to distinguish them. Use this as the first call in a session to orient yourself before drilling into specific tasks or projects."),
+				mcp.WithDescription("Returns a comprehensive snapshot of the user's active task landscape in a single call. Includes all tags, the active area-to-project hierarchy (with IDs), today's active items (tasks and projects), and active upcoming scheduled/due items within a configurable lookahead window. Descendants of completed, canceled, or trashed containers are excluded to match Things app visibility. Each item has a type field ('task' or 'project') to distinguish them. Use this as the first call in a session to orient yourself before drilling into specific tasks or projects. Recurring to-dos whose current occurrence was completed appear as their projected next occurrence with materialized:false; such items cannot be completed or edited until Things creates the real occurrence."),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithDestructiveHintAnnotation(false),
 				mcp.WithIdempotentHintAnnotation(true),

@@ -271,6 +271,28 @@ func withTodayIndexRefDate(t time.Time) taskOption {
 	}
 }
 
+func withRepeater() taskOption {
+	return func(p *thingscloud.TaskActionItemPayload) {
+		p.Repeater = &thingscloud.RepeaterConfiguration{
+			FrequencyUnit:      256, // weekly
+			FrequencyAmplitude: 1,
+		}
+	}
+}
+
+func withRecurrence(templateUUID string) taskOption {
+	return func(p *thingscloud.TaskActionItemPayload) {
+		ids := []string{templateUUID}
+		p.RecurrenceTaskIDs = &ids
+	}
+}
+
+func withAlarmOffset(secs int) taskOption {
+	return func(p *thingscloud.TaskActionItemPayload) {
+		p.AlarmTimeOffset = &secs
+	}
+}
+
 func withNote(text string) taskOption {
 	return func(p *thingscloud.TaskActionItemPayload) {
 		note := thingscloud.Note{

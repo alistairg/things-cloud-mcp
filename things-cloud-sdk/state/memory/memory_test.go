@@ -497,14 +497,107 @@ func TestStateUpdateRejectsMalformedKnownItem(t *testing.T) {
 
 func TestStateUpdateRejectsUnknownKind(t *testing.T) {
 	s := NewState()
-	err := s.Update(things.Item{
-		UUID:   "future-item",
-		Kind:   things.ItemKind("Task7"),
-		Action: things.ItemActionCreated,
-		P:      []byte(`{}`),
-	})
+	for _, kind := range []things.ItemKind{"Task8", "Task999"} {
+		err := s.Update(things.Item{
+			UUID:   "future-item",
+			Kind:   kind,
+			Action: things.ItemActionCreated,
+			P:      []byte(`{}`),
+		})
+		if err == nil {
+			t.Fatalf("expected unknown kind error for %q", kind)
+		}
+	}
+}
+
+func TestStateUpdateTask7ClearsRecurrenceReference(t *testing.T) {
+	t.Parallel()
+	s := NewState()
+	err := s.Update(
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask, Action: things.ItemActionCreated, P: json.RawMessage(`{"tt":"Instance","st":1,"rt":["template-1"]}`)},
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask7, Action: things.ItemActionModified, P: json.RawMessage(`{"rt":[]}`)},
+	)
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	task := s.Tasks["task-1"]
+	if task == nil {
+		t.Fatal("task missing after Task7 update")
+	}
+	if len(task.RecurrenceIDs) != 0 {
+		t.Errorf("RecurrenceIDs = %v, want empty", task.RecurrenceIDs)
+	}
+	if task.Schedule != things.TaskScheduleAnytime || task.Title != "Instance" {
+		t.Errorf("Task7 patch disturbed unrelated fields: %#v", task)
+	}
+}
+
+func TestStateUpdateTask7ReschedulesSomedayToAnytime(t *testing.T) {
+	t.Parallel()
+	s := NewState()
+	err := s.Update(
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask, Action: things.ItemActionCreated, P: json.RawMessage(`{"tt":"Deferred","st":2}`)},
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask7, Action: things.ItemActionModified, P: json.RawMessage(`{"st":1}`)},
+	)
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	task := s.Tasks["task-1"]
+	if task == nil || task.Schedule != things.TaskScheduleAnytime {
+		t.Fatalf("task = %#v, want schedule Anytime", task)
+	}
+}
+
+func TestStateUpdateTask7AppliesModificationDate(t *testing.T) {
+	t.Parallel()
+	s := NewState()
+	err := s.Update(
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask, Action: things.ItemActionCreated, P: json.RawMessage(`{"tt":"Edited"}`)},
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask7, Action: things.ItemActionModified, P: json.RawMessage(`{"lai":1755738004,"md":1755738004}`)},
+	)
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	task := s.Tasks["task-1"]
+	if task == nil || task.ModificationDate == nil {
+		t.Fatalf("task = %#v, want modification date set", task)
+	}
+	if got := task.ModificationDate.Unix(); got != 1755738004 {
+		t.Errorf("ModificationDate = %d, want 1755738004", got)
+	}
+}
+
+func TestStateUpdateTask7SharesIdentityWithTask6(t *testing.T) {
+	t.Parallel()
+	s := NewState()
+	err := s.Update(
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask, Action: things.ItemActionCreated, P: json.RawMessage(`{"tt":"One object","st":2}`)},
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask7, Action: things.ItemActionModified, P: json.RawMessage(`{"st":1}`)},
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask, Action: things.ItemActionModified, P: json.RawMessage(`{"ss":3}`)},
+	)
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	if len(s.Tasks) != 1 {
+		t.Fatalf("got %d tasks, want single object across Task6/Task7 events", len(s.Tasks))
+	}
+	task := s.Tasks["task-1"]
+	if task.Title != "One object" || task.Schedule != things.TaskScheduleAnytime || task.Status != things.TaskStatusCompleted {
+		t.Errorf("interleaved Task6/Task7 state = %#v", task)
+	}
+}
+
+func TestStateUpdateRejectsMalformedTask7Payload(t *testing.T) {
+	s := NewState()
+	err := s.Update(
+		things.Item{UUID: "task-1", Kind: things.ItemKindTask, Action: things.ItemActionCreated, P: json.RawMessage(`{"tt":"Fine"}`)},
+		things.Item{UUID: "task-2", Kind: things.ItemKindTask7, Action: things.ItemActionModified, P: []byte(`{"st":`)},
+	)
 	if err == nil {
-		t.Fatal("expected unknown kind error")
+		t.Fatal("expected malformed payload error")
+	}
+	if len(s.Tasks) != 0 {
+		t.Fatalf("state changed after malformed Task7 in batch: %#v", s.Tasks)
 	}
 }
 

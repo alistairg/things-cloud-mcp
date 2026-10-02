@@ -172,6 +172,23 @@ func TestStateAllLegacyKindsUseMigratedKeys(t *testing.T) {
 	}
 }
 
+func TestStateTask7IsNotLegacyRemapped(t *testing.T) {
+	t.Parallel()
+	// Task7 is a current-generation kind: even a UUID-shaped identifier must be
+	// stored verbatim, never hashed through the legacy remapping.
+	const uuidStyleID = "AAAAAAAA-1111-2222-3333-BBBBBBBBBBBB"
+	state := NewState()
+	if err := state.Update(things.Item{UUID: uuidStyleID, Kind: things.ItemKindTask7, Action: things.ItemActionModified, P: json.RawMessage(`{"st":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if state.Tasks[uuidStyleID] == nil {
+		t.Error("Task7 item not stored under its original identifier")
+	}
+	if state.Tasks[things.EncodeLegacyIdentifier(uuidStyleID)] != nil {
+		t.Error("Task7 identifier was legacy-remapped")
+	}
+}
+
 func assertIDs(t *testing.T, field string, got []string, want ...string) {
 	t.Helper()
 	if len(got) != len(want) {

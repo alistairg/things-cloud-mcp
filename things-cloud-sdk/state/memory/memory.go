@@ -303,19 +303,21 @@ func (s *State) Update(items ...things.Item) error {
 			return fmt.Errorf("item %s (%s) has unsupported action %d", rawItem.UUID, rawItem.Kind, rawItem.Action)
 		}
 		var target any
-		switch rawItem.Kind {
-		case things.ItemKindTask, things.ItemKindTask4, things.ItemKindTask3, things.ItemKindTaskPlain:
+		if things.IsTaskKind(rawItem.Kind) {
 			target = &things.TaskActionItemPayload{}
-		case things.ItemKindChecklistItem, things.ItemKindChecklistItem2, things.ItemKindChecklistItem3:
-			target = &things.CheckListActionItemPayload{}
-		case things.ItemKindArea, things.ItemKindArea3, things.ItemKindAreaPlain:
-			target = &things.AreaActionItemPayload{}
-		case things.ItemKindTag, things.ItemKindTag4, things.ItemKindTagPlain:
-			target = &things.TagActionItemPayload{}
-		case things.ItemKindTombstone, things.ItemKindTombstonePlain:
-			target = &things.TombstoneActionItemPayload{}
-		default:
-			return fmt.Errorf("item %s has unsupported kind %q", rawItem.UUID, rawItem.Kind)
+		} else {
+			switch rawItem.Kind {
+			case things.ItemKindChecklistItem, things.ItemKindChecklistItem2, things.ItemKindChecklistItem3:
+				target = &things.CheckListActionItemPayload{}
+			case things.ItemKindArea, things.ItemKindArea3, things.ItemKindAreaPlain:
+				target = &things.AreaActionItemPayload{}
+			case things.ItemKindTag, things.ItemKindTag4, things.ItemKindTagPlain:
+				target = &things.TagActionItemPayload{}
+			case things.ItemKindTombstone, things.ItemKindTombstonePlain:
+				target = &things.TombstoneActionItemPayload{}
+			default:
+				return fmt.Errorf("item %s has unsupported kind %q", rawItem.UUID, rawItem.Kind)
+			}
 		}
 		if err := json.Unmarshal(rawItem.P, target); err != nil {
 			return fmt.Errorf("decode item %s (%s): %w", rawItem.UUID, rawItem.Kind, err)
@@ -330,8 +332,7 @@ func (s *State) Update(items ...things.Item) error {
 		if legacy && things.ValidateUUID(rawItem.UUID) != nil {
 			rawItem.UUID = things.EncodeLegacyIdentifier(rawItem.UUID)
 		}
-		switch rawItem.Kind {
-		case things.ItemKindTask, things.ItemKindTask4, things.ItemKindTask3, things.ItemKindTaskPlain:
+		if things.IsTaskKind(rawItem.Kind) {
 			item := things.TaskActionItem{Item: rawItem}
 			_ = json.Unmarshal(rawItem.P, &item.P)
 			if legacy {
@@ -348,7 +349,10 @@ func (s *State) Update(items ...things.Item) error {
 			default:
 				// Unsupported action: skip
 			}
+			continue
+		}
 
+		switch rawItem.Kind {
 		case things.ItemKindChecklistItem, things.ItemKindChecklistItem2, things.ItemKindChecklistItem3:
 			item := things.CheckListActionItem{Item: rawItem}
 			_ = json.Unmarshal(rawItem.P, &item.P)

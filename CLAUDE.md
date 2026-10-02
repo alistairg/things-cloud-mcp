@@ -41,7 +41,7 @@ Before adding or modifying MCP tool definitions, check the [MCP builder skill](h
 
 **Date handling**: `parseDate()` tries RFC3339 first (e.g. `2025-03-01T00:00:00+08:00`), then falls back to `YYYY-MM-DD` (UTC midnight). Date filters are exclusive (strict `.Before()`/`.After()`). Output uses ISO8601. Zero-value dates (year ≤ 1970) are filtered from output. Schedule/deadline dates are timezone-agnostic (Things stores date-only); `created_*` filters benefit from RFC3339 with timezone since `CreationDate` has full timestamp precision.
 
-**Recurrence**: User-facing strings (`daily`, `weekly:mon,wed`, `monthly:15`, `every 3 days`) converted to Things Cloud wire format (`rrv`, `fu`, `fa`, `of`, `wd`). Weekly uses `wd` (weekday bitmask), not `dy`. Recurring tasks use a template+instance model: templates have `rr` (recurrence rule) + `icsd`, instances have `rt` (pointing to template). `isRecurringTemplate()` detects templates; they are filtered from all API outputs. Creation sets `rr` directly on the task (single entity); Things app creates instances on next sync. `handleEditTask` manages template lifecycle on recurrence changes: "change" updates existing template `rr` in place, "add" sets `rr`/`icsd` on the task, "none" trashes the template.
+**Recurrence**: User-facing strings (`daily`, `weekly:mon,wed`, `monthly:15`, `every 3 days`) converted to Things Cloud wire format (`rrv`, `fu`, `fa`, `of`, `wd`). Weekly uses `wd` (weekday bitmask), not `dy`. Recurring tasks use a template+instance model: templates have `rr` (recurrence rule) + `icsd`, instances have `rt` (pointing to template). `isRecurringTemplate()` detects templates; they are hidden from API outputs as entities, but a template with no open instance surfaces as a projected next occurrence (`projectedOccurrence()`, template UUID, `materialized: false`, date from `tir`) so repeating to-dos never vanish between occurrences. Tags/areas live on the template; instances resolve them via `effectiveTagIDs()`/`effectiveAreaIDs()` (rt → template fallback). Creation sets `rr` directly on the task (single entity); Things app creates instances on next sync. `handleEditTask` manages template lifecycle on recurrence changes: "change" updates existing template `rr` in place, "add" sets `rr`/`icsd` on the task, "none" trashes the template.
 
 **Error/result helpers**: `errResult(msg)` for errors, `jsonResult(v)` for success. Validation functions (`validateTaskUUID`, `validateOpts`) run before writes.
 
@@ -56,7 +56,7 @@ The deployed instance runs as a systemd user service on the remote server `wenbo
 ```bash
 # Call any MCP tool (e.g. things_diagnose)
 curl -s -X POST http://localhost:28063/mcp \
-  -H "Authorization: Basic $(echo -n 'pixelwenbo@gmail.com:bmp6125388th' | base64)" \
+  -H "Authorization: Basic $(echo -n "$THINGS_EMAIL:$THINGS_PASSWORD" | base64)" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"things_diagnose","arguments":{}}}'
 ```
