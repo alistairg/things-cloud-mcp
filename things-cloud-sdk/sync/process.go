@@ -70,7 +70,7 @@ func (s *Syncer) processItem(item things.Item, serverIndex int, ts time.Time) ([
 	switch item.Kind {
 	case things.ItemKindArea, things.ItemKindArea3, things.ItemKindAreaPlain:
 		return s.processAreaItem(item, serverIndex, ts)
-	case things.ItemKindTag, things.ItemKindTag4, things.ItemKindTagPlain:
+	case things.ItemKindTag, things.ItemKindTag4, things.ItemKindTag2, things.ItemKindTagPlain:
 		return s.processTagItem(item, serverIndex, ts)
 	case things.ItemKindChecklistItem, things.ItemKindChecklistItem2, things.ItemKindChecklistItem3:
 		return s.processChecklistItem(item, serverIndex, ts)

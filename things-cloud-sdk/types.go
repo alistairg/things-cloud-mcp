@@ -66,6 +66,7 @@ var (
 	ItemKindTask7     ItemKind = "Task7"
 	ItemKindTask4     ItemKind = "Task4"
 	ItemKindTask3     ItemKind = "Task3"
+	ItemKindTask2     ItemKind = "Task2"
 	ItemKindTaskPlain ItemKind = "Task"
 	// ItemKindArea identifies an Area
 	ItemKindArea      ItemKind = "Area2"
@@ -76,6 +77,7 @@ var (
 	// ItemKindTag identifies a Tag
 	ItemKindTag            ItemKind = "Tag3"
 	ItemKindTag4           ItemKind = "Tag4"
+	ItemKindTag2           ItemKind = "Tag2"
 	ItemKindTagPlain       ItemKind = "Tag"
 	// ItemKindTombstone is the current deletion-record kind.
 	ItemKindTombstone      ItemKind = "Tombstone2"
@@ -109,7 +111,7 @@ func IsSettingsKind(kind ItemKind) bool {
 // semantics or identifier generation, so it stays fail-closed until verified.
 func IsTaskKind(kind ItemKind) bool {
 	switch kind {
-	case ItemKindTask, ItemKindTask7, ItemKindTask4, ItemKindTask3, ItemKindTaskPlain:
+	case ItemKindTask, ItemKindTask7, ItemKindTask4, ItemKindTask3, ItemKindTask2, ItemKindTaskPlain:
 		return true
 	}
 	return false
